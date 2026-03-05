@@ -891,16 +891,40 @@ export function calcGradedDeathBenefit(inputs) {
   const {
     faceValue, customerAge, paymentTermYears, earnRate,
     yearsUntilClaim, tjmTaxRate, dividendExitTaxRate,
+    returnOfPremium,
   } = inputs;
-
-  const gradedFactor = getGradedBenefitFactor(yearsUntilClaim);
-  const gradedFaceValue = faceValue * gradedFactor;
 
   const rate = getGradedScaledRate(customerAge, paymentTermYears);
   const monthlyPremium = rate != null ? faceValue * rate : null;
   const payMonths = paymentTermYears * 12;
   const totalMonths = yearsUntilClaim * 12;
   const monthlyEarnRate = earnRate / 12;
+
+  // Actual premiums paid at claim time (result.totalPaid is always full-term total)
+  const actualPremiumsPaid = monthlyPremium != null
+    ? monthlyPremium * Math.min(totalMonths, payMonths) : 0;
+
+  // Acquisition costs (always applied)
+  const commissionRate = inputs.gradedCommissionRate || 0.075;
+  const overrideRate = 0.02;
+  const firstYearPremiums = monthlyPremium != null
+    ? monthlyPremium * Math.min(12, payMonths) : 0;
+  const commission = firstYearPremiums * commissionRate;
+  const override = firstYearPremiums * overrideRate;
+  const premiumTax = actualPremiumsPaid * 0.00875;
+  const totalAcquisitionCost = commission + override + premiumTax;
+
+  // Graded benefit with optional Return of Premium
+  const gradedFactor = getGradedBenefitFactor(yearsUntilClaim);
+  const gradedPercentBenefit = faceValue * gradedFactor;
+  let gradedFaceValue;
+  let ropApplied = false;
+  if (returnOfPremium && yearsUntilClaim <= 3) {
+    gradedFaceValue = Math.max(gradedPercentBenefit, actualPremiumsPaid);
+    ropApplied = actualPremiumsPaid > gradedPercentBenefit;
+  } else {
+    gradedFaceValue = gradedPercentBenefit;
+  }
 
   const result = compoundStandard(monthlyPremium, payMonths, totalMonths, monthlyEarnRate, tjmTaxRate);
 
@@ -914,8 +938,8 @@ export function calcGradedDeathBenefit(inputs) {
   const guaranteedTax = guaranteedGrowth * (inputs.passThroughTaxRate || 0);
   const netGuaranteed = guaranteedGrowth - guaranteedTax;
 
-  const policyGain = result.finalPot - gradedFaceValue;
-  const netGrowthAboveFace = netValueAfterTax - gradedFaceValue - guaranteedTax;
+  const policyGain = result.finalPot - gradedFaceValue - totalAcquisitionCost;
+  const netGrowthAboveFace = netValueAfterTax - gradedFaceValue - guaranteedTax - totalAcquisitionCost;
 
   return {
     product: 'Graded Death Benefit',
@@ -932,6 +956,14 @@ export function calcGradedDeathBenefit(inputs) {
     paidToFH: gradedFaceValue,
     gradedFactor,
     gradedFaceValue,
+    gradedPercentBenefit,
+    ropApplied,
+    actualPremiumsPaid,
+    commission,
+    override,
+    premiumTax,
+    totalAcquisitionCost,
+    firstYearPremiums,
     guaranteedGrowth,
     guaranteedTax,
     netGuaranteed,
@@ -953,6 +985,10 @@ export function calcGradedDeathBenefit(inputs) {
         exitTax,
         valueAfterAllTaxes: netValueAfterTax,
         faceValue: gradedFaceValue,
+        commission,
+        override,
+        premiumTax,
+        totalAcquisitionCost,
         guaranteedGrowth,
         guaranteedTax,
         netGuaranteed,

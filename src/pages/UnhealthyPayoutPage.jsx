@@ -30,6 +30,8 @@ export default function UnhealthyPayoutPage({
 }) {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [mortalityMultiplier, setMortalityMultiplier] = useState(1.5);
+  const [returnOfPremium, setReturnOfPremium] = useState(true);
+  const [gradedCommissionRate, setGradedCommissionRate] = useState(7.5);
 
   function resetDefaults() {
     setFaceValue(10000);
@@ -45,6 +47,8 @@ export default function UnhealthyPayoutPage({
     setGuaranteedRate(2);
     setTrustEarnRate(4.5);
     setMortalityMultiplier(1.5);
+    setReturnOfPremium(true);
+    setGradedCommissionRate(7.5);
   }
 
   const inputs = useMemo(
@@ -57,10 +61,13 @@ export default function UnhealthyPayoutPage({
       dividendExitTaxRate: dividendExitTaxRate / 100,
       guaranteedRate: guaranteedRate / 100,
       trustEarnRate: trustEarnRate / 100,
+      returnOfPremium,
+      gradedCommissionRate: gradedCommissionRate / 100,
     }),
     [faceValue, customerAge, paymentTermYears, earnRate, yearsUntilClaim,
       financeChargeRate, tjmTaxRate, trustTaxRate, passThroughTaxRate,
-      dividendExitTaxRate, guaranteedRate, trustEarnRate]
+      dividendExitTaxRate, guaranteedRate, trustEarnRate,
+      returnOfPremium, gradedCommissionRate]
   );
 
   const results = useMemo(() => calculateAllUnhealthy(inputs), [inputs]);
@@ -135,6 +142,17 @@ export default function UnhealthyPayoutPage({
                 <NumberInput value={mortalityMultiplier} onChange={setMortalityMultiplier} min={1.0} max={5.0} step={0.1} suffix="×" />
                 <span className="text-xs text-navy-400 mt-1">Adjusts SSA mortality rates for substandard risk (1.0× = standard)</span>
               </InputGroup>
+              <InputGroup label="Return of Premium (ROP)">
+                <button type="button" onClick={() => setReturnOfPremium(!returnOfPremium)}
+                  className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${returnOfPremium ? 'bg-teal-500' : 'bg-navy-300'}`}>
+                  <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${returnOfPremium ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+                <span className="text-xs text-navy-400 mt-1">During graded window (Yr 1-3), benefit = max(graded %, premiums paid)</span>
+              </InputGroup>
+              <InputGroup label="Graded DB Commission Rate">
+                <NumberInput value={gradedCommissionRate} onChange={setGradedCommissionRate} min={0} max={20} step={0.5} suffix="%" />
+                <span className="text-xs text-navy-400 mt-1">Applied to first year premiums. 2% override is added automatically.</span>
+              </InputGroup>
             </div>
           </div>
         )}
@@ -180,7 +198,13 @@ export default function UnhealthyPayoutPage({
                     <h3 className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-1">Graded Death Benefit</h3>
                     <div className="text-xs text-purple-600 space-y-0.5">
                       <p>Yr 1: 25% &bull; Yr 2: 50% &bull; Yr 3: 75% &bull; Yr 4+: 100%</p>
-                      <p className="font-semibold">Current ({yearsUntilClaim}yr claim): {Math.round(r.gradedFactor * 100)}% = {fmt(r.gradedFaceValue)} benefit paid</p>
+                      <p className="font-semibold">Current ({yearsUntilClaim}yr claim): {Math.round(r.gradedFactor * 100)}% = {fmt(r.gradedPercentBenefit)} graded benefit</p>
+                      {r.ropApplied && (
+                        <p className="font-semibold text-teal-700">ROP Override: {fmt(r.actualPremiumsPaid)} premiums paid &gt; {fmt(r.gradedPercentBenefit)} graded &rarr; benefit = {fmt(r.gradedFaceValue)}</p>
+                      )}
+                      {returnOfPremium && yearsUntilClaim <= 3 && !r.ropApplied && (
+                        <p className="text-purple-500">ROP active but graded % ({fmt(r.gradedPercentBenefit)}) already exceeds premiums paid ({fmt(r.actualPremiumsPaid)})</p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -234,13 +258,29 @@ export default function UnhealthyPayoutPage({
                       <span className="font-mono text-navy-800">{fmt(potAtClaim)}</span>
                     </div>
                     <div className="flex justify-between text-sm py-0.5">
-                      <span className="text-navy-600">{isGraded ? `Death Benefit (${Math.round(r.gradedFactor * 100)}%)` : 'Face Value'}</span>
+                      <span className="text-navy-600">{isGraded ? `Death Benefit (${r.ropApplied ? 'ROP' : Math.round(r.gradedFactor * 100) + '%'})` : 'Face Value'}</span>
                       <span className="font-mono text-navy-800">-{fmt(isGraded ? r.gradedFaceValue : faceValue)}</span>
                     </div>
+                    {isGraded && (
+                      <>
+                        <div className="flex justify-between text-sm py-0.5">
+                          <span className="text-navy-600">Commission ({fmtPct(gradedCommissionRate)} of 1st yr)</span>
+                          <span className="font-mono text-red-600">-{fmt(r.commission)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm py-0.5">
+                          <span className="text-navy-600">Override (2% of 1st yr)</span>
+                          <span className="font-mono text-red-600">-{fmt(r.override)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm py-0.5">
+                          <span className="text-navy-600">Premium Tax (0.875%)</span>
+                          <span className="font-mono text-red-600">-{fmt(r.premiumTax)}</span>
+                        </div>
+                      </>
+                    )}
                     <div className="border-t border-navy-300 my-1"></div>
                     <div className="flex justify-between text-sm py-0.5 font-semibold">
-                      <span className="text-navy-800">Policy Gain</span>
-                      <span className="font-mono text-navy-800">{fmt(r.policyGain)}</span>
+                      <span className={isGraded && r.policyGain < 0 ? 'text-red-700' : 'text-navy-800'}>{isGraded ? 'TJM Gain/Loss' : 'Policy Gain'}</span>
+                      <span className={`font-mono ${isGraded && r.policyGain < 0 ? 'text-red-600' : 'text-navy-800'}`}>{fmt(r.policyGain)}</span>
                     </div>
                   </div>
 
@@ -485,7 +525,7 @@ export default function UnhealthyPayoutPage({
             <div className="text-xs text-navy-200 space-y-3 leading-relaxed">
               <p>
                 <span className="font-semibold text-purple-400">Graded Death Benefit:</span>{' '}
-                Functions like Multi-Pay Whole Life but with a graded benefit schedule (25%/50%/75%/100% over 4 years). Higher premium rates reflect the increased mortality risk. Early death results in only a partial face value payout, but the policy builds cash value with the same tax treatment as whole life.
+                Functions like Multi-Pay Whole Life but with a graded benefit schedule (25%/50%/75%/100% over 4 years). Higher premium rates reflect the increased mortality risk. With Return of Premium (ROP) enabled, the death benefit during years 1-3 is the greater of the graded percentage or total premiums paid to date, protecting families from receiving less than they paid in. Acquisition costs (commission, override, premium tax) are included in TJM's gain/loss calculation.
               </p>
               <p>
                 <span className="font-semibold text-blue-400">Financed Annuity:</span>{' '}
